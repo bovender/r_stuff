@@ -1,0 +1,121 @@
+---
+title: "Zeilenweise Daten zensieren"
+author: "Daniel Kraus"
+date: "2022-11-29"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+```
+
+# Aufgabe
+
+Ziel ist es, in einer Tabelle in bestimmten Spalten nicht vorhandene Werte durch
+`0` zu ersetzen, aber nur in Zeilen, die in einer anderen Spalte einen bestimmten
+Wert enthalten.
+
+# Beispieldaten
+
+Die Beispieldaten sind sehr simpel gehalten:
+
+```{r sample_data}
+sample_data <- tribble(
+  ~index, ~condition, ~value_1, ~value_2, ~unrelated,
+  1,      NA,         NA,       NA,       NA,
+  2,      NA,         10,       20,       30,
+  3,      100,        NA,       NA,       40,
+  4,      100,        10,       20,       NA,
+  5,      NA,         NA,       NA,       50
+)
+```
+
+Die Spalte `condition` wird herangezogen, um festzustellen, ob die `NA`-Werte in
+den Spalten `value_1` und `value_2` durch `0` ersetzt werden sollen. Nur in den
+Zeilen, in denen `condition` den Wert `NA` hat, sollen die `NA`-Werte in den
+besagten Spalten durch `0` ersetzt werden. Das bedeutet, daß am Ende nur in der
+ersten und in der letzten Zeile neue Nullen auftauchen dürfen. Außerdem soll die
+Spalte `unrelated` in jedem Fall nicht verändert werden.
+
+# Schlechter Algorithmus
+
+Der erste, schlechte Algorithmus bedient sich der Funktion `replace()`, wie bei
+[StackOverflow](https://stackoverflow.com/a/43331824/270712) vorgeschlagen.
+
+```{r bad_algorithm}
+sample_data |> 
+  mutate(value_1 = replace(value_1, is.na(condition) & is.na(value_1), 0)) |> 
+  mutate(value_2 = replace(value_2, is.na(condition) & is.na(value_2), 0))
+```
+
+Am Ende stehen zwar in der ersten und in der letzten Zeile Nullen in den
+`value`-Spalten. Das ganze ist aber sehr unflexibel und wird auch unübersichtlich,
+wenn man, wie im Falle der Erymorphe-Datenbank, noch mehr Spalten hat, in denen
+die `NA`'s durch Nullen ersetzt werden sollen.
+
+Den obigen Algorithmus kann man ähnlich auch mit `ifelse()` und vermutlich 
+auch mit anderen Hilfsfunktionen formulieren, aber es bleibt immer dabei, daß
+man für jede `value`-Spalte, die man hat, eine eigene Zeile schreiben muß. Das
+widerspricht dem DRY-Prinzip ('do not repeat yourself') und erschwert Lesbarkeit
+und Wartung des Codes.
+
+# Besserer Algorithmus 
+
+Ein besserer Algorithmus erscheint mir daher zu sein, den Datensatz aufzuteilen
+in einen Datensatz, in dem die `NA`'s in den fraglichen Spalten ersetzt werden
+müssen und in einen, bei dem die Spalten in Ruhe gelassen werden, und nach dem
+Ersetzen beide Datensätze wieder zu einem zusammen zu fügen.
+
+```{r split_data}
+(
+  data_to_change <- sample_data |> 
+    filter(is.na(condition))
+)
+
+(
+  data_to_keep <- sample_data |> 
+    filter(!is.na(condition))
+)
+```
+
+Nun kann man in `data_to_change` die `NA`s ersetzen. Um sowohl die Spalte
+`condition` als auch die Spalte `unrelated` dabei nicht anzurühren, bedienen
+wir uns der Funktion `mutate_at()`, der wir sagen können, welche Spalten
+verändert werden sollen. Diese können schön einfach mit der Notation
+`Start_Spalte:End_Spalte` angegeben werden. Auf diese Weise kann man auch
+mehrere Spalten modifizieren, ohne sie alle einzeln eintippen zu müssen. Es
+genügt, die erste und die letzte zu verändernde Spalte mit einem Doppelpunkt
+zu verbinden, mit einem `vars(...)` zu umhüllen und dieses Paket dann der
+Funktion `mutate_at()` zu überreichen:
+
+```{r replace_nas}
+(
+  changed_data <- data_to_change |> 
+    mutate_at(vars(value_1:value_2), ~replace_na(., 0))
+)
+```
+
+Den Trick mit `mutate_at()` kann man ebenfalls bei
+[StackOverflow](https://stackoverflow.com/a/55291983/270712) nachlesen.
+
+Schließlich fügen wir beide Teil-Datensätze wieder zu einem zusammen. Wir
+nehmen dazu die Funktion `add_row()`. Vermutlich ginge es auch mit `full_join()`
+genauso. Ich weiß nicht, inwiefern es Performance-Unterschiede geben könnte,
+und habe auf die Schnelle im Netz auch nichts dazu gefunden.
+
+Beim Zusammenfügen geht zwar die ursprüngliche Reihenfolge der Zeilen verloren,
+aber die können wir ganz einfach wieder herstellen, indem wir den Datensatz nach
+der Spalte `index` sortieren.
+
+```{r join_data}
+(
+  modifed_sample_data <-
+    changed_data |> 
+    add_row(data_to_keep) |> 
+    arrange(index)
+)
+```
+
+Voilà. Wie gewünscht, stehen in der ersten und in der letzten Zeile nun Nullen,
+aber nur in den Spalten `value_1` und `value_2`. Alle anderen `NA`'s wurden
+nicht angerührt.
